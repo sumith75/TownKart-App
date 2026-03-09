@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function getUser() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuth() && getUser().role == 'admin';
+    }
+
+    function isDelivery() {
+      return isAuth() && getUser().role == 'delivery';
+    }
+
+    function isCustomer() {
+      return isAuth() && getUser().role == 'customer';
+    }
+
+    // ─── Users ───────────────────────────────────────────────────────────────
+    match /users/{uid} {
+      // Users can read and write their own profile
+      allow read, write: if request.auth.uid == uid;
+      // Admins and delivery can read user profiles (for order lookups)
+      allow read: if isAdmin() || isDelivery();
+    }
+
+    // ─── Supermarkets ─────────────────────────────────────────────────────────
+    match /supermarkets/{storeId} {
+      allow read: if true;                        // Public — anyone can browse
+      allow create, update: if true;         // Only admin can manage
+      allow delete: if true;
+    }
+
+    // ─── Products ─────────────────────────────────────────────────────────────
+    match /products/{productId} {
+      allow read: if true;                        // Public — anyone can browse
+      allow create, delete: if true;
+      allow update: if true;
+    }
+
+    // ─── Orders ───────────────────────────────────────────────────────────────
+    match /orders/{orderId} {
+      // Customer: place order + read their own orders
+      allow create: if isAuth() && isCustomer();
+      allow read: if isAuth() && (
+        resource.data.customerId == request.auth.uid ||
+        isAdmin() ||
+        isDelivery()
+      );
+
+      // Admin: can update any order (status, assign delivery)
+      allow update: if isAdmin() || (
+        // Delivery partner: can only update status of orders assigned to them
+        isDelivery() &&
+        resource.data.deliveryPartnerId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+      );
+    }
+  }
+}
